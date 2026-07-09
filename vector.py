@@ -56,8 +56,32 @@ class Vector:
     def __rmul__(self,other):
         return self.__mul__(other)
     
+    def __truediv__(self,other):
+        if not isinstance(other,(int,float)):
+            return NotImplemented
+        if abs(other) < self.epsilon:
+            raise ZeroDivisionError
+        return Vector([x/other for x in self.data])
+    
+    def __rtruediv__(self, other):
+        if isinstance(other, (int, float)):
+            if any(abs(x) < self.epsilon for x in self.data):
+                raise ZeroDivisionError("Cannot divide by a vector containing zero elements")
+            return Vector([other / x for x in self.data])
+        return NotImplemented
+
     def __neg__(self):
         return Vector([-x for x in self.data])
+    
+    def __eq__(self,other):
+        if not isinstance(other, Vector):
+            return False
+        if self.dimension != other.dimension:
+            return False
+        return all(abs(a - b) < self.epsilon for a, b in zip(self.data, other.data))
+
+    def __iter__(self):
+        return iter(self.data)
 
     def dot(self,other):
         if self.dimension != other.dimension:
@@ -79,6 +103,4 @@ class Vector:
 
     def is_orthogonal_to(self,other):
         return abs(self.dot(other)) < self.epsilon
-
-vec = Vector([2,5])
-print(vec+2)
+    
