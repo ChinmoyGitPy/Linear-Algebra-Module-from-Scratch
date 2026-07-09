@@ -23,14 +23,30 @@ class Vector:
         return f"Vector({self.data})"
 
     def __add__(self,other):
-        if self.dimension != other.dimension:
-            raise ValueError("Vectors must be of equal dimensions for addition")
-        return Vector([a + b for a,b in zip(self.data,other.data)])
+        if isinstance(other,(int,float)):
+            return Vector([x+other for x in self.data])
+        if isinstance(other,Vector):
+            if self.dimension != other.dimension:
+                raise ValueError("Vectors must be of equal dimensions")
+            return Vector([a + b for a,b in zip(self.data,other.data)])
+        return NotImplemented
+
+    def __radd__(self,other):
+        return self.__add__(other)
 
     def __sub__(self,other):
-        if self.dimension != other.dimension:
-            raise ValueError("Vectors must be of equal dimensions for subtraction")
-        return Vector([a - b for a,b in zip(self.data,other.data)])
+        if isinstance(other,(int,float)):
+            return Vector([x-other for x in self.data])
+        if isinstance(other,Vector):
+            if self.dimension != other.dimension:
+                raise ValueError("Vectors must be of equal dimensions")
+            return Vector([a - b for a,b in zip(self.data,other.data)])
+        return NotImplemented
+
+    def __rsub__(self,other):
+        if isinstance(other, (int, float)):
+            return Vector([other - x for x in self.data])
+        return NotImplemented
     
     def __mul__(self,other):
         if isinstance(other,(int,float)):
@@ -63,3 +79,6 @@ class Vector:
 
     def is_orthogonal_to(self,other):
         return abs(self.dot(other)) < self.epsilon
+
+vec = Vector([2,5])
+print(vec+2)
