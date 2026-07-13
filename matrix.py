@@ -1,4 +1,4 @@
-import math
+import random
 from vector import Vector
 
 class Matrix:
@@ -221,35 +221,57 @@ class Matrix:
             u_j = a_j
 
             for q_k in q_columns:
-                projection_scalar = a_j.dot(q_k)
-                u_j = u_j - (q_k * projection_scalar)
+                proj = a_j.dot(q_k)
+                u_j = u_j - (q_k * proj)
 
-            if u_j.norm() < self.epsilon:
-                q_columns.append(Vector([0.0]*m))
+            norm_u = u_j.norm()
+            if norm_u < self.epsilon:
+                random_vec = Vector([random.uniform(-1, 1) for _ in range(m)])
+                for q_k in q_columns:
+                    proj = random_vec.dot(q_k)
+                    random_vec = random_vec - (q_k * proj)
+                norm_random = random_vec.norm()
+                if norm_random < self.epsilon:
+                    raise ValueError("Failed to find an independent orthogonal vector.")
+                q_columns.append(random_vec * (1.0 / norm_random))
             else:
-                q_columns.append(u_j.normalise())
+                q_columns.append(u_j * (1.0 / norm_u))
 
-        Q = Matrix(q_columns).transpose
+        Q = Matrix(q_columns).transpose   
         R = Q.transpose @ self
+        return Q, R
 
-        return Q,R
-
-    def eig(self, max_iterations=300):
+    def eig(self, max_iterations=300, tolerance=None):
         if self.num_rows != self.num_cols:
             raise ValueError("Eigen-decomposition requires a square matrix")
-        n = self.num_rows
+        if tolerance is None:
+            tolerance = self.epsilon * max(self.num_rows, 1)
+
+            n = self.num_rows
         Ak = self
         V = Matrix.identity(n)
 
         for _ in range(max_iterations):
-            Q, R = Ak.qr()
-            Ak = R @ Q
+            shift = Ak.rows[-1][-1]   
+            shifted = Ak - Matrix.identity(n) * shift
+
+            Q, R = shifted.qr()
+            Ak = R @ Q + Matrix.identity(n) * shift
             V = V @ Q
+
+            off_diag_sum = 0.0
+            for i in range(n):
+                for j in range(n):
+                    if i != j:
+                        off_diag_sum += abs(Ak.rows[i][j])
+            if off_diag_sum < tolerance:
+                break
+
         eigenvalues = [Ak.rows[i][i] for i in range(n)]
-        eigenvectors = [V.get_column(i) for i in range(n)]
-        combined = sorted(zip(eigenvalues,eigenvectors),key=lambda pair: pair[0],reverse=True)
+        eigenvectors = [V.get_column(i) for i in range(n)]   
+        combined = sorted(zip(eigenvalues, eigenvectors),
+                        key=lambda pair: pair[0], reverse=True)
         sorted_eigenvalues = [pair[0] for pair in combined]
         sorted_eigenvectors = [pair[1] for pair in combined]
-
         return sorted_eigenvalues, sorted_eigenvectors
     
