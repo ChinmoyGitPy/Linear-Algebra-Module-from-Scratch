@@ -1,3 +1,5 @@
+
+import math
 import random
 from vector import Vector
 
@@ -241,37 +243,54 @@ class Matrix:
         R = Q.transpose @ self
         return Q, R
 
-    def eig(self, max_iterations=300, tolerance=None):
+    def eig(self, max_iterations=2000, tolerance=None):
         if self.num_rows != self.num_cols:
             raise ValueError("Eigen-decomposition requires a square matrix")
+        n = self.num_rows
         if tolerance is None:
-            tolerance = self.epsilon * max(self.num_rows, 1)
+            tolerance = self.epsilon * n
 
-            n = self.num_rows
         Ak = self
         V = Matrix.identity(n)
 
         for _ in range(max_iterations):
-            shift = Ak.rows[-1][-1]   
-            shifted = Ak - Matrix.identity(n) * shift
+            off = 0.0
+            for i in range(n):
+                for j in range(i + 1, n):
+                    off += abs(Ak.rows[i][j])
+            if off < tolerance:
+                break
 
+            # Wilkinson shift
+            if n >= 2:
+                a = Ak.rows[n-2][n-2]
+                b = Ak.rows[n-2][n-1]
+                c = Ak.rows[n-1][n-2]
+                d = Ak.rows[n-1][n-1]
+                trace = a + d
+                det = a * d - b * c
+                disc = trace * trace - 4.0 * det
+                if disc >= 0:
+                    sqrt_disc = math.sqrt(disc)
+                    eig1 = (trace + sqrt_disc) / 2.0
+                    eig2 = (trace - sqrt_disc) / 2.0
+                    if abs(eig1 - d) < abs(eig2 - d):
+                        shift = eig1
+                    else:
+                        shift = eig2
+                else:
+                    shift = d
+            else:
+                shift = Ak.rows[0][0]
+
+            shifted = Ak - Matrix.identity(n) * shift
             Q, R = shifted.qr()
             Ak = R @ Q + Matrix.identity(n) * shift
             V = V @ Q
 
-            off_diag_sum = 0.0
-            for i in range(n):
-                for j in range(n):
-                    if i != j:
-                        off_diag_sum += abs(Ak.rows[i][j])
-            if off_diag_sum < tolerance:
-                break
-
         eigenvalues = [Ak.rows[i][i] for i in range(n)]
-        eigenvectors = [V.get_column(i) for i in range(n)]   
-        combined = sorted(zip(eigenvalues, eigenvectors),
-                        key=lambda pair: pair[0], reverse=True)
-        sorted_eigenvalues = [pair[0] for pair in combined]
-        sorted_eigenvectors = [pair[1] for pair in combined]
+        eigenvectors = [V.get_column(i) for i in range(n)]
+        combined = sorted(zip(eigenvalues,eigenvectors),key=lambda pair: pair[0],reverse=True)
+        sorted_eigenvalues = [p[0] for p in combined]
+        sorted_eigenvectors = [p[1] for p in combined]
         return sorted_eigenvalues, sorted_eigenvectors
-    

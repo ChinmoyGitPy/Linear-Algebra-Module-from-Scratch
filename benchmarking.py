@@ -1,0 +1,618 @@
+# benchmark.py
+
+import math
+import random
+import time
+import sys
+from vector import Vector
+from matrix import Matrix
+from tools import svd, pinv, pca
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+
+
+class BenchmarkTimer:
+    def __init__(self):
+        self.start = 0
+        self.end = 0
+        self.elapsed = 0
+
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.perf_counter()
+        self.elapsed = self.end - self.start
+
+
+class TestResult:
+    def __init__(self, name):
+        self.name = name
+        self.passed = False
+        self.custom_time = 0.0
+        self.numpy_time = 0.0
+        self.error_margin = 0.0
+        self.details = ""
+
+    def speedup_factor(self):
+        if self.custom_time > 0 and self.numpy_time > 0:
+            return self.custom_time / self.numpy_time
+        return 0.0
+
+
+class BenchmarkRunner:
+
+    def __init__(self):
+        self.results = []
+        self.random_state = 42
+        random.seed(self.random_state)
+        if NUMPY_AVAILABLE:
+            np.random.seed(self.random_state)
+
+    def time_custom(self, func, *args, iterations=100, **kwargs):
+        for _ in range(min(10, iterations // 10)):
+            func(*args, **kwargs)
+        timer = BenchmarkTimer()
+        with timer:
+            for _ in range(iterations):
+                func(*args, **kwargs)
+        return timer.elapsed / iterations
+
+    def time_numpy(self, func, *args, iterations=100, **kwargs):
+        if not NUMPY_AVAILABLE:
+            return 0.0
+        for _ in range(min(10, iterations // 10)):
+            func(*args, **kwargs)
+        timer = BenchmarkTimer()
+        with timer:
+            for _ in range(iterations):
+                func(*args, **kwargs)
+        return timer.elapsed / iterations
+
+    def array_from_vector(self, vec):
+        return [vec[i] for i in range(len(vec))]
+
+    def array_from_matrix(self, mat):
+        return [[mat[i][j] for j in range(mat.num_cols)]
+                for i in range(mat.num_rows)]
+
+    def max_absolute_difference(self, custom, reference):
+        c = np.array(custom) if not isinstance(custom, np.ndarray) else custom
+        r = np.array(reference) if not isinstance(reference, np.ndarray) else reference
+        return float(np.max(np.abs(c - r)))
+
+    def run_test(self, name, test_function):
+        result = TestResult(name)
+        try:
+            test_function(result)
+        except Exception as e:
+            result.passed = False
+            result.details = f"Exception: {str(e)}"
+        self.results.append(result)
+
+    def print_header(self, title):
+        print("\n" + "=" * 72)
+        print(f"  {title}")
+        print("=" * 72)
+
+    def print_result_line(self, result):
+        status = "[PASS]" if result.passed else "[FAIL]"
+        line = f"{status:8} {result.name:<40}"
+
+        if result.error_margin > 0:
+            line += f"  error: {result.error_margin:.2e}"
+
+        if result.custom_time > 0 and result.numpy_time > 0:
+            custom_ms = result.custom_time * 1000
+            numpy_ms = result.numpy_time * 1000
+            speedup = result.speedup_factor()
+
+            line += f"  custom: {custom_ms:8.3f}ms"
+            line += f"  numpy: {numpy_ms:8.3f}ms"
+            if speedup > 1:
+                line += f"  (numpy {speedup:.1f}x faster)"
+            elif speedup > 0:
+                line += f"  (custom {1/speedup:.1f}x faster)"
+
+        if result.details:
+            line += f"  [{result.details}]"
+
+        print(line)
+
+    def print_summary(self):
+        total = len(self.results)
+        passed = sum(1 for r in self.results if r.passed)
+        failed = total - passed
+
+        print("\n" + "=" * 72)
+        print("  SUMMARY")
+        print("=" * 72)
+        print(f"  Total tests:  {total}")
+        print(f"  Passed:       {passed}")
+        print(f"  Failed:       {failed}")
+        print(f"  Success rate: {passed/total*100:.1f}%" if total > 0 else "  No tests run")
+
+        speedups = []
+        for r in self.results:
+            if r.passed and r.custom_time > 0 and r.numpy_time > 0:
+                sf = r.speedup_factor()
+                if sf > 0:
+                    speedups.append(sf)
+
+        if speedups:
+            avg_speedup = sum(speedups) / len(speedups)
+            geo_speedup = math.exp(sum(math.log(s) for s in speedups) / len(speedups))
+            print(f"\n  Performance comparison (numpy vs custom):")
+            print(f"    Average speedup:  {avg_speedup:.1f}x")
+            print(f"    Geometric mean:   {geo_speedup:.1f}x")
+            print(f"    Range:            {min(speedups):.1f}x - {max(speedups):.1f}x")
+
+        if not NUMPY_AVAILABLE:
+            print("\n  NOTE: NumPy not installed. Performance comparison skipped.")
+            print("  Install with: pip install numpy")
+
+
+def make_vector_data(size=5):
+    return [random.uniform(-10.0, 10.0) for _ in range(size)]
+
+def make_matrix_data(rows, cols):
+    return [[random.uniform(-10.0, 10.0) for _ in range(cols)] for _ in range(rows)]
+
+def make_symmetric_matrix(n):
+    A = np.random.randn(n, n)
+    return (A + A.T).tolist()
+
+def make_well_conditioned_matrix(n):
+    A = np.random.randn(n, n)
+    U, S, Vt = np.linalg.svd(A)
+    S = np.linspace(1, 10, n)
+    return (U @ np.diag(S) @ Vt).tolist()
+
+
+def test_vector_creation_and_access(runner):
+    data = make_vector_data(10)
+
+    def test_creation(result):
+        vec = Vector(data)
+        npy = np.array(data)
+        assert len(vec) == len(npy)
+        assert vec.dimension == npy.shape[0]
+        for i in range(len(data)):
+            assert abs(vec[i] - npy[i]) < 1e-12
+        result.custom_time = runner.time_custom(Vector, data, iterations=5000)
+        result.numpy_time = runner.time_numpy(np.array, data, iterations=5000)
+        result.error_margin = 0.0
+        result.passed = True
+
+    runner.run_test("Vector: creation and indexing", test_creation)
+
+
+def test_vector_arithmetic(runner):
+    d1 = make_vector_data(20)
+    d2 = make_vector_data(20)
+    scalar = random.uniform(1.0, 5.0)
+
+    def test_arithmetic(result):
+        v1, v2 = Vector(d1), Vector(d2)
+        n1, n2 = np.array(d1), np.array(d2)
+        operations = [
+            (v1 + v2, n1 + n2),
+            (v1 - v2, n1 - n2),
+            (v1 * scalar, n1 * scalar),
+            (v1 / scalar, n1 / scalar),
+            (-v1, -n1),
+            (v1 + scalar, n1 + scalar),
+            (scalar + v1, scalar + n1),
+            (scalar - v1, scalar - n1),
+            (scalar / v2, scalar / n2),
+        ]
+        max_diff = 0.0
+        for custom, numpy_val in operations:
+            c_arr = runner.array_from_vector(custom)
+            n_arr = numpy_val.tolist() if isinstance(numpy_val, np.ndarray) else numpy_val
+            diff = max(abs(a - b) for a, b in zip(c_arr, n_arr))
+            max_diff = max(max_diff, diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(lambda a, b: a + b, v1, v2, iterations=2000)
+        result.numpy_time = runner.time_numpy(lambda a, b: a + b, n1, n2, iterations=2000)
+        result.passed = max_diff < 1e-10
+
+    runner.run_test("Vector: arithmetic operations", test_arithmetic)
+
+
+def test_vector_norms_and_dot(runner):
+    d1 = make_vector_data(15)
+    d2 = make_vector_data(15)
+
+    def test_norms(result):
+        v1, v2 = Vector(d1), Vector(d2)
+        n1, n2 = np.array(d1), np.array(d2)
+        checks = {
+            'dot': (v1.dot(v2), float(np.dot(n1, n2))),
+            'norm L1': (v1.norm(1), float(np.linalg.norm(n1, 1))),
+            'norm L2': (v1.norm(2), float(np.linalg.norm(n1, 2))),
+            'norm L3': (v1.norm(3), float(np.linalg.norm(n1, 3))),
+        }
+        max_diff = 0.0
+        for name, (custom, numpy_val) in checks.items():
+            diff = abs(custom - numpy_val)
+            max_diff = max(max_diff, diff)
+        if v1.norm(2) > 1e-12:
+            v1_norm = v1.normalise()
+            n1_norm = n1 / np.linalg.norm(n1)
+            norm_diff = max(abs(v1_norm[i] - n1_norm[i]) for i in range(len(v1_norm)))
+            max_diff = max(max_diff, norm_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(v1.dot, v2, iterations=5000)
+        result.numpy_time = runner.time_numpy(np.dot, n1, n2, iterations=5000)
+        result.passed = max_diff < 1e-10
+
+    runner.run_test("Vector: dot product and norms", test_norms)
+
+
+def test_vector_equality(runner):
+    d1 = make_vector_data(10)
+
+    def test_equality(result):
+        v1 = Vector(d1)
+        v2 = Vector(d1[:])
+        v3 = Vector([x + 1.0 for x in d1])
+        n1 = np.array(d1)
+        assert v1 == v2
+        assert not (v1 == v3)
+        custom_list = list(v1)
+        numpy_list = n1.tolist()
+        max_diff = max(abs(a - b) for a, b in zip(custom_list, numpy_list))
+        result.error_margin = max_diff
+        result.passed = max_diff < 1e-12
+
+    runner.run_test("Vector: equality and iteration", test_equality)
+
+
+def test_matrix_creation(runner):
+    data = make_matrix_data(8, 6)
+
+    def test_creation(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        assert mat.shape == npy.shape
+        assert mat.num_rows == npy.shape[0]
+        assert mat.num_cols == npy.shape[1]
+        I = Matrix.identity(5)
+        I_npy = np.eye(5)
+        I_custom = runner.array_from_matrix(I)
+        I_diff = runner.max_absolute_difference(I_custom, I_npy)
+        T = mat.transpose
+        T_custom = runner.array_from_matrix(T)
+        T_npy = npy.T
+        T_diff = runner.max_absolute_difference(T_custom, T_npy)
+        max_diff = max(I_diff, T_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(Matrix, data, iterations=1000)
+        result.numpy_time = runner.time_numpy(np.array, data, iterations=1000)
+        result.passed = max_diff < 1e-12
+
+    runner.run_test("Matrix: creation and properties", test_creation)
+
+
+def test_matrix_arithmetic(runner):
+    d1 = make_matrix_data(10, 10)
+    d2 = make_matrix_data(10, 10)
+    scalar = random.uniform(1.0, 5.0)
+
+    def test_arithmetic(result):
+        m1, m2 = Matrix(d1), Matrix(d2)
+        n1, n2 = np.array(d1), np.array(d2)
+        operations = [
+            (runner.array_from_matrix(m1 + m2), n1 + n2),
+            (runner.array_from_matrix(m1 - m2), n1 - n2),
+            (runner.array_from_matrix(m1 * m2), n1 * n2),
+            (runner.array_from_matrix(m1 @ m2), n1 @ n2),
+            (runner.array_from_matrix(m1 * scalar), n1 * scalar),
+            (runner.array_from_matrix(m1 / scalar), n1 / scalar),
+            (runner.array_from_matrix(m1 + scalar), n1 + scalar),
+            (runner.array_from_matrix(scalar - m1), scalar - n1),
+        ]
+        max_diff = 0.0
+        for custom, numpy_val in operations:
+            diff = runner.max_absolute_difference(custom, numpy_val)
+            max_diff = max(max_diff, diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(m1.__matmul__, m2, iterations=200)
+        result.numpy_time = runner.time_numpy(n1.__matmul__, n2, iterations=200)
+        result.passed = max_diff < 1e-10
+
+    runner.run_test("Matrix: arithmetic operations", test_arithmetic)
+
+
+def test_matrix_determinant(runner):
+    data = make_matrix_data(6, 6)
+
+    def test_determinant(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        custom_det = mat.det
+        numpy_det = np.linalg.det(npy)
+        diff = abs(custom_det - numpy_det)
+        result.error_margin = diff
+        result.custom_time = runner.time_custom(lambda m: m.det, mat, iterations=100)
+        result.numpy_time = runner.time_numpy(np.linalg.det, npy, iterations=100)
+        result.passed = diff < 1e-8
+
+    runner.run_test("Matrix: determinant", test_determinant)
+
+
+def test_matrix_inverse(runner):
+    data = make_well_conditioned_matrix(6)
+
+    def test_inverse(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        custom_inv = mat.inverse()
+        numpy_inv = np.linalg.inv(npy)
+        inv_diff = runner.max_absolute_difference(
+            runner.array_from_matrix(custom_inv), numpy_inv
+        )
+        identity_check = mat @ custom_inv
+        I_custom = runner.array_from_matrix(identity_check)
+        I_npy = np.eye(6)
+        identity_diff = runner.max_absolute_difference(I_custom, I_npy)
+        max_diff = max(inv_diff, identity_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(mat.inverse, iterations=50)
+        result.numpy_time = runner.time_numpy(np.linalg.inv, npy, iterations=50)
+        result.passed = max_diff < 1e-8
+
+    runner.run_test("Matrix: inverse", test_inverse)
+
+
+def test_matrix_qr(runner):
+    data = make_matrix_data(8, 8)
+
+    def test_qr(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        Q, R = mat.qr()
+        Q_custom = np.array(runner.array_from_matrix(Q))
+        R_custom = np.array(runner.array_from_matrix(R))
+        qtq = Q_custom.T @ Q_custom
+        ortho_diff = runner.max_absolute_difference(qtq, np.eye(8))
+        recon = Q_custom @ R_custom
+        recon_diff = runner.max_absolute_difference(recon, npy)
+        max_diff = max(ortho_diff, recon_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(mat.qr, iterations=20)
+        result.numpy_time = runner.time_numpy(np.linalg.qr, npy, iterations=20)
+        result.passed = max_diff < 1e-8
+
+    runner.run_test("Matrix: QR decomposition", test_qr)
+
+
+def test_matrix_eigenvalues(runner):
+    data = make_symmetric_matrix(6)
+
+    def test_eigenvalues(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        evals_custom, evecs_custom = mat.eig(max_iterations=500)
+        evals_npy, evecs_npy = np.linalg.eigh(npy)
+        idx = np.argsort(evals_npy)[::-1]
+        evals_npy = evals_npy[idx]
+        evecs_npy = evecs_npy[:, idx]
+        eval_diff = max(abs(ec - en) for ec, en in zip(evals_custom, evals_npy))
+        evec_diff = 0.0
+        for i in range(6):
+            custom_vec = np.array(runner.array_from_vector(evecs_custom[i]))
+            numpy_vec = evecs_npy[:, i]
+            diff1 = np.max(np.abs(custom_vec - numpy_vec))
+            diff2 = np.max(np.abs(custom_vec + numpy_vec))
+            evec_diff = max(evec_diff, min(diff1, diff2))
+        max_diff = max(eval_diff, evec_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(mat.eig, iterations=10)
+        result.numpy_time = runner.time_numpy(np.linalg.eigh, npy, iterations=10)
+        result.passed = max_diff < 1e-5
+
+    runner.run_test("Matrix: eigenvalues and eigenvectors", test_eigenvalues)
+
+
+def test_svd_decomposition(runner):
+    data = make_matrix_data(30, 20)
+
+    def test_svd(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        U, sigma, Vt = svd(mat)
+        U_npy, S_npy, Vt_npy = np.linalg.svd(npy, full_matrices=True)
+        min_len = min(len(sigma), len(S_npy))
+        sigma_diff = max(abs(sigma[i] - S_npy[i]) for i in range(min_len))
+        m, n = npy.shape
+        k = min(m, n)
+        S_mat = np.zeros((m, n))
+        for i in range(k):
+            S_mat[i, i] = sigma[i]
+        U_arr = np.array(runner.array_from_matrix(U))
+        Vt_arr = np.array(runner.array_from_matrix(Vt))
+        recon = U_arr @ S_mat @ Vt_arr
+        recon_diff = runner.max_absolute_difference(recon, npy)
+        max_diff = max(sigma_diff, recon_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(svd, mat, iterations=3)
+        result.numpy_time = runner.time_numpy(np.linalg.svd, npy, iterations=3)
+        result.passed = max_diff < 1e-2
+
+    runner.run_test("SVD: singular value decomposition", test_svd)
+
+
+def test_pseudoinverse(runner):
+    data = make_matrix_data(25, 15)
+
+    def test_pinv(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        custom_pinv = pinv(mat)
+        numpy_pinv = np.linalg.pinv(npy)
+        pinv_diff = runner.max_absolute_difference(
+            runner.array_from_matrix(custom_pinv), numpy_pinv
+        )
+        A = npy
+        A_plus = np.array(runner.array_from_matrix(custom_pinv))
+        cond1 = runner.max_absolute_difference(A @ A_plus @ A, A)
+        cond2 = runner.max_absolute_difference(A_plus @ A @ A_plus, A_plus)
+        max_condition_error = max(cond1, cond2)
+        max_diff = max(pinv_diff, max_condition_error)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(pinv, mat, iterations=3)
+        result.numpy_time = runner.time_numpy(np.linalg.pinv, npy, iterations=3)
+        result.passed = max_diff < 1e-2
+
+    runner.run_test("Pseudoinverse: Moore-Penrose inverse", test_pinv)
+
+
+def test_pca(runner):
+    data = make_matrix_data(100, 15)
+
+    def test_pca(result):
+        mat = Matrix(data)
+        npy = np.array(data)
+        components, var, transformed = pca(mat, n_components=5)
+        npy_centered = npy - np.mean(npy, axis=0)
+        U, S, Vt = np.linalg.svd(npy_centered, full_matrices=False)
+        total_var = np.sum(S ** 2)
+        var_npy = [(s ** 2) / total_var for s in S[:5]]
+        var_diff = max(abs(vc - vn) for vc, vn in zip(var, var_npy))
+        comp_custom = np.array(runner.array_from_matrix(components))
+        comp_diff = 0.0
+        for i in range(5):
+            d1 = np.max(np.abs(comp_custom[i] - Vt[i]))
+            d2 = np.max(np.abs(comp_custom[i] + Vt[i]))
+            comp_diff = max(comp_diff, min(d1, d2))
+        max_diff = max(var_diff, comp_diff)
+        result.error_margin = max_diff
+        result.custom_time = runner.time_custom(pca, mat, iterations=3)
+        result.numpy_time = runner.time_numpy(
+            lambda X: np.linalg.svd(X - np.mean(X, axis=0), full_matrices=False),
+            npy, iterations=3
+        )
+        result.passed = max_diff < 1e-2
+
+    runner.run_test("PCA: principal component analysis", test_pca)
+
+
+def test_edge_cases(runner):
+
+    def test_errors(result):
+        errors_expected = 6
+        errors_caught = 0
+        try:
+            Vector([])
+        except ValueError:
+            errors_caught += 1
+        try:
+            Vector([1, "a", 3])
+        except TypeError:
+            errors_caught += 1
+        try:
+            Vector([1, 2]) + Vector([1, 2, 3])
+        except ValueError:
+            errors_caught += 1
+        try:
+            Vector([1.0, 2.0]) / 0.0
+        except ZeroDivisionError:
+            errors_caught += 1
+        try:
+            Vector([0.0, 0.0]).normalise()
+        except ValueError:
+            errors_caught += 1
+        try:
+            Matrix([[1.0, 2.0], [2.0, 4.0]]).inverse()
+        except ValueError:
+            errors_caught += 1
+        result.passed = errors_caught == errors_expected
+        result.details = f"{errors_caught}/{errors_expected} errors caught"
+
+    runner.run_test("Edge cases: error handling", test_errors)
+
+
+def test_large_matrix_operations(runner):
+
+    def test_large(result):
+        n = 80
+        data = make_matrix_data(n, n)
+        mat = Matrix(data)
+        npy = np.array(data)
+        custom_time = 0.0
+        numpy_time = 0.0
+        diff = 0.0
+        timer = BenchmarkTimer()
+        with timer:
+            product = mat @ mat
+        custom_time = timer.elapsed
+        product_custom = np.array(runner.array_from_matrix(product))
+        if NUMPY_AVAILABLE:
+            timer = BenchmarkTimer()
+            with timer:
+                product_npy = npy @ npy
+            numpy_time = timer.elapsed
+            diff = runner.max_absolute_difference(product_custom, product_npy)
+        result.error_margin = diff
+        result.custom_time = custom_time
+        result.numpy_time = numpy_time
+        result.passed = diff < 1e-8
+        result.details = f"80x80 matrix multiply"
+
+    runner.run_test("Stress test: large matrix multiplication", test_large)
+
+
+def print_banner():
+    print("=" * 72)
+    print("  Linear Algebra Module - Benchmark Suite")
+    print("=" * 72)
+    print(f"  Python version: {sys.version.split()[0]}")
+    print(f"  NumPy available: {NUMPY_AVAILABLE}")
+    if NUMPY_AVAILABLE:
+        print(f"  NumPy version: {np.__version__}")
+    print("=" * 72)
+
+
+def main():
+    print_banner()
+    runner = BenchmarkRunner()
+
+    runner.print_header("Vector Operations")
+    test_vector_creation_and_access(runner)
+    test_vector_arithmetic(runner)
+    test_vector_norms_and_dot(runner)
+    test_vector_equality(runner)
+
+    runner.print_header("Matrix Operations")
+    test_matrix_creation(runner)
+    test_matrix_arithmetic(runner)
+    test_matrix_determinant(runner)
+    test_matrix_inverse(runner)
+    test_matrix_qr(runner)
+    test_matrix_eigenvalues(runner)
+
+    runner.print_header("Linear Algebra Tools")
+    test_svd_decomposition(runner)
+    test_pseudoinverse(runner)
+    test_pca(runner)
+
+    runner.print_header("Edge Cases and Stress Tests")
+    test_edge_cases(runner)
+    test_large_matrix_operations(runner)
+
+    runner.print_header("Detailed Results")
+    for result in runner.results:
+        runner.print_result_line(result)
+
+    runner.print_summary()
+
+
+if __name__ == "__main__":
+    main()
