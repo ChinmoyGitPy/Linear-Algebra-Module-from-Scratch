@@ -3,9 +3,9 @@ A custom linear algebra module with a few machine learning tools
 built entirely from scratch using pure Python.
 """
 
-from vector import Vector
-from matrix import Matrix
-from tools import svd, pinv, pca
+from .vector import Vector
+from .matrix import Matrix
+from .tools import svd, pinv, pca
 
 __all__ = [
     "Vector",
