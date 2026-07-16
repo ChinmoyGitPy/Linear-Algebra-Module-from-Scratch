@@ -1,1 +1,4 @@
 .vscode/settings.json
+__pycache__/matrix.cpython-312.pyc
+__pycache__/tools.cpython-312.pyc
+__pycache__/vector.cpython-312.pyc
