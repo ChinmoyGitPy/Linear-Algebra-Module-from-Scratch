@@ -1,8 +1,8 @@
 
 import math
 import random
-from vector import Vector
-from matrix import Matrix
+from .vector import Vector
+from .matrix import Matrix
 
 def _complete_orthonormal_basis(vectors, dimension):
     basis = list(vectors)
